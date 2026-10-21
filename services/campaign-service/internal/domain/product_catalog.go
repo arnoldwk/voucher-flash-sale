@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"time"
@@ -118,6 +119,7 @@ func (c *CatalogItem) ToVoucherProduct(isClaimed bool) VoucherProduct {
 		MinTransaction:   NewIDRMoney(c.MinTransactionIDR),
 		StockStatus:      stockStatus,
 		CustomerState:    state,
+		RemainingStock:   c.RemainingStock,
 	}
 }
 
@@ -131,6 +133,22 @@ type VoucherProduct struct {
 	MinTransaction   Money         `json:"minTransaction"`
 	StockStatus      StockStatus   `json:"stockStatus"`
 	CustomerState    CustomerState `json:"customerState"`
+	RemainingStock   int           `json:"-"`
+}
+
+// MarshalJSON serializes RemainingStock under both camelCase and snake_case keys.
+func (v VoucherProduct) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"voucherProductId": v.VoucherProductID,
+		"category":         v.Category,
+		"name":             v.Name,
+		"discountValue":    v.DiscountValue,
+		"price":            v.Price,
+		"minTransaction":   v.MinTransaction,
+		"stockStatus":      v.StockStatus,
+		"customerState":    v.CustomerState,
+		"remainingStock":   v.RemainingStock,
+	})
 }
 
 // ProductCatalogRepository reads the voucher catalog data.
