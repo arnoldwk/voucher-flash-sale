@@ -59,3 +59,9 @@ jobs:
 
       - name: Build Voucher Service
         run: go build -v -o /dev/null ./services/voucher-service/cmd/server
+
+      - name: Build Customer Service
+        run: go build -v -o /dev/null ./services/customer-service/cmd/server
+
+      - name: Build Auth Service
+        run: go build -v -o /dev/null ./services/auth-service/cmd/server

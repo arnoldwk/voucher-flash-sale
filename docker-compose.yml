@@ -94,6 +94,56 @@ services:
       redis:
         condition: service_healthy
 
+  customer-service:
+    build:
+      context: .
+      dockerfile: build/package/Dockerfile.customer
+    container_name: customer-service
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      CUSTOMER_SERVICE_PORT: "8085"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: flashsale
+      POSTGRES_SSLMODE: disable
+      INTERNAL_API_KEY: salt-hackathon-internal-secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: build/package/Dockerfile.auth
+    container_name: auth-service
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      AUTH_SERVICE_PORT: "8084"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: flashsale
+      POSTGRES_SSLMODE: disable
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: salt-hackathon-jwt-secret-key-32bytes
+      CUSTOMER_SERVICE_URL: http://customer-service:8085
+      INTERNAL_API_KEY: salt-hackathon-internal-secret
+      ENABLE_DEMO_OTP: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      customer-service:
+        condition: service_started
+
 volumes:
   pgdata:
   redisdata:
