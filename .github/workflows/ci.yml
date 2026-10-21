@@ -1,0 +1,61 @@
+name: CI - Trunk-Based Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-lint:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Format check
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Go code is not formatted:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Run Tests with Race Detector
+        run: go test -v -race ./...
+
+  build-check:
+    name: Build Microservices
+    runs-on: ubuntu-latest
+    needs: test-and-lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Build Campaign Service
+        run: go build -v -o /dev/null ./services/campaign-service/cmd/server
+
+      - name: Build Claim Service
+        run: go build -v -o /dev/null ./services/claim-service/cmd/server
+
+      - name: Build Voucher Service
+        run: go build -v -o /dev/null ./services/voucher-service/cmd/server

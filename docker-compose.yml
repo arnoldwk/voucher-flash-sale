@@ -1,0 +1,99 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: flashsale-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: flashsale
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d flashsale"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: flashsale-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  campaign-service:
+    build:
+      context: .
+      dockerfile: build/package/Dockerfile.campaign
+    container_name: campaign-service
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      CAMPAIGN_SERVICE_PORT: "8081"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: flashsale
+      POSTGRES_SSLMODE: disable
+      REDIS_ADDR: redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  claim-service:
+    build:
+      context: .
+      dockerfile: build/package/Dockerfile.claim
+    container_name: claim-service
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      CLAIM_SERVICE_PORT: "8082"
+      REDIS_ADDR: redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  voucher-service:
+    build:
+      context: .
+      dockerfile: build/package/Dockerfile.voucher
+    container_name: voucher-service
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      VOUCHER_SERVICE_PORT: "8083"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: flashsale
+      POSTGRES_SSLMODE: disable
+      REDIS_ADDR: redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
