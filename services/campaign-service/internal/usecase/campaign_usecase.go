@@ -16,14 +16,18 @@ type CreateCampaignInput struct {
 	DiscountAmount float64   `json:"discount_amount"`
 	StartTime      time.Time `json:"start_time"`
 	EndTime        time.Time `json:"end_time"`
+	ProductID      string    `json:"product_id"`
+	EventID        string    `json:"event_id"`
+	CategoryID     string    `json:"category_id"`
 }
 
 type CampaignUsecase struct {
-	repo domain.CampaignRepository
+	repo  domain.CampaignRepository
+	cache domain.StockCache
 }
 
-func NewCampaignUsecase(repo domain.CampaignRepository) *CampaignUsecase {
-	return &CampaignUsecase{repo: repo}
+func NewCampaignUsecase(repo domain.CampaignRepository, cache domain.StockCache) *CampaignUsecase {
+	return &CampaignUsecase{repo: repo, cache: cache}
 }
 
 func (u *CampaignUsecase) Create(ctx context.Context, input CreateCampaignInput) (*domain.Campaign, error) {
@@ -37,25 +41,43 @@ func (u *CampaignUsecase) Create(ctx context.Context, input CreateCampaignInput)
 
 	now := time.Now().UTC()
 	campaign := &domain.Campaign{
-		ID:             uuid.New().String(),
-		Title:          input.Title,
-		Description:    input.Description,
-		TotalStock:     input.TotalStock,
-		RemainingStock: input.TotalStock,
-		DiscountAmount: input.DiscountAmount,
-		StartTime:      input.StartTime.UTC(),
-		EndTime:        input.EndTime.UTC(),
-		Status:         "ACTIVE",
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:               uuid.New().String(),
+		ProductID:        input.ProductID,
+		FlashSaleEventID: input.EventID,
+		CategoryID:       input.CategoryID,
+		Title:            input.Title,
+		Description:      input.Description,
+		SessionStock:     input.TotalStock,
+		ClaimedCount:     0,
+		RemainingStock:   input.TotalStock,
+		DiscountAmount:   input.DiscountAmount,
+		StartTime:        input.StartTime.UTC(),
+		EndTime:          input.EndTime.UTC(),
+		Status:           "ACTIVE",
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	if err := u.repo.Create(ctx, campaign); err != nil {
 		return nil, err
 	}
 
-	// Pre-warm stock into Redis for ultra-fast atomic deductions
-	if err := u.repo.WarmupRedisStock(ctx, campaign.ID, campaign.TotalStock); err != nil {
+	// Warm hot path: metadata campaign + counter stock
+	ttl := time.Until(campaign.EndTime) + time.Hour
+	if ttl < time.Hour {
+		ttl = time.Hour
+	}
+
+	meta := domain.CampaignMeta{
+		CategoryID:     campaign.CategoryID,
+		DiscountAmount: campaign.DiscountAmount,
+		StartTime:      campaign.StartTime,
+		EndTime:        campaign.EndTime,
+	}
+	if err := u.cache.PublishMeta(ctx, campaign.ID, meta); err != nil {
+		return nil, err
+	}
+	if err := u.cache.Warmup(ctx, campaign.ID, campaign.RemainingStock, ttl); err != nil {
 		return nil, err
 	}
 
@@ -68,8 +90,8 @@ func (u *CampaignUsecase) GetByID(ctx context.Context, id string) (*domain.Campa
 		return nil, err
 	}
 
-	// Fetch live real-time stock from Redis if available
-	liveStock, err := u.repo.GetRedisStock(ctx, id)
+	// Override remaining stock dengan counter live di cache
+	liveStock, err := u.cache.Stock(ctx, id)
 	if err == nil && liveStock >= 0 {
 		campaign.RemainingStock = liveStock
 	}
@@ -83,10 +105,18 @@ func (u *CampaignUsecase) List(ctx context.Context) ([]*domain.Campaign, error) 
 		return nil, err
 	}
 
-	for _, c := range campaigns {
-		liveStock, err := u.repo.GetRedisStock(ctx, c.ID)
-		if err == nil && liveStock >= 0 {
-			c.RemainingStock = liveStock
+	if len(campaigns) > 0 {
+		ids := make([]string, len(campaigns))
+		for i, c := range campaigns {
+			ids[i] = c.ID
+		}
+		stocks, err := u.cache.Stocks(ctx, ids) // satu round-trip MGET
+		if err == nil {
+			for _, c := range campaigns {
+				if s, ok := stocks[c.ID]; ok && s >= 0 {
+					c.RemainingStock = s
+				}
+			}
 		}
 	}
 

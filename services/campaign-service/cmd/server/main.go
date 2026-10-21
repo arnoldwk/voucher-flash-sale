@@ -10,9 +10,11 @@ import (
 
 	"voucher-flash-sale/pkg/database"
 	"voucher-flash-sale/pkg/logger"
+	pkgmiddleware "voucher-flash-sale/pkg/middleware"
 	pkgredis "voucher-flash-sale/pkg/redis"
 	"voucher-flash-sale/services/campaign-service/internal/config"
 	deliveryhttp "voucher-flash-sale/services/campaign-service/internal/delivery/http"
+	"voucher-flash-sale/services/campaign-service/internal/domain"
 	"voucher-flash-sale/services/campaign-service/internal/repository"
 	"voucher-flash-sale/services/campaign-service/internal/usecase"
 )
@@ -48,12 +50,35 @@ func main() {
 	defer rdb.Close()
 
 	// 3. Clean Architecture Wiring
-	repo := repository.NewPostgresCampaignRepo(db, rdb)
-	uc := usecase.NewCampaignUsecase(repo)
-	handler := deliveryhttp.NewCampaignHandler(uc)
+	pgRepo := repository.NewPostgresCampaignRepo(db)
+	cache := repository.NewRedisCampaignCache(rdb)
+	campaignUC := usecase.NewCampaignUsecase(pgRepo, cache)
+	campaignHandler := deliveryhttp.NewCampaignHandler(campaignUC)
+
+	// Voucher product catalog wiring (API baru /product/v1/)
+	catalogRepo := repository.NewPostgresProductCatalogRepo(db)
+	catalogCache := repository.NewRedisCampaignCache(rdb)
+	listVouchersUC := usecase.NewListVouchersUsecase(catalogRepo, catalogCache)
+	catalogHandler := deliveryhttp.NewVoucherCatalogHandler(listVouchersUC)
+
+	// 3b. Warmup Redis stock counters for seeded campaigns.
+	// Warmup menggunakan remaining_stock (bukan session_stock) sesuai kontrak.
+	warmupCtx, warmupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := warmupCacheFromDB(warmupCtx, pgRepo, cache); err != nil {
+		log.Warn("failed to warmup stock cache", "error", err)
+	}
+	warmupCancel()
 
 	mux := http.NewServeMux()
-	handler.RegisterRoutes(mux)
+
+	// Internal admin API (campaign CRUD)
+	campaignHandler.RegisterRoutes(mux)
+
+	// Public API v1 — membutuhkan JWT
+	voucherCatalogMux := http.NewServeMux()
+	catalogHandler.RegisterRoutes(voucherCatalogMux)
+	mux.Handle("/product/v1/", http.StripPrefix("/product/v1",
+		pkgmiddleware.AuthBearer(voucherCatalogMux)))
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -83,4 +108,34 @@ func main() {
 		log.Error("forced shutdown", "error", err)
 	}
 	log.Info("campaign-service stopped")
+}
+
+// warmupCacheFromDB mengisi counter stock Redis dari snapshot Postgres.
+// Nilai yang dip patterning adalah remaining_stock (sudah dikurangi klaim),
+// bukan session_stock, agar claim-service tidak bisa melebihi stok真正 tersisa.
+func warmupCacheFromDB(ctx context.Context, repo domain.CampaignRepository, cache domain.StockCache) error {
+	campaigns, err := repo.List(ctx)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	for _, c := range campaigns {
+		if c.Status != "ACTIVE" && c.Status != "SCHEDULED" {
+			continue
+		}
+		if !c.EndTime.After(now) {
+			continue
+		}
+
+		ttl := time.Until(c.EndTime) + time.Hour
+		if ttl < time.Hour {
+			ttl = time.Hour
+		}
+
+		if err := cache.Warmup(ctx, c.ID, c.RemainingStock, ttl); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -11,13 +11,11 @@ import (
 
 type mockCampaignRepo struct {
 	campaigns map[string]*domain.Campaign
-	redis     map[string]int
 }
 
 func newMockCampaignRepo() *mockCampaignRepo {
 	return &mockCampaignRepo{
 		campaigns: make(map[string]*domain.Campaign),
-		redis:     make(map[string]int),
 	}
 }
 
@@ -49,21 +47,46 @@ func (m *mockCampaignRepo) UpdateRemainingStock(ctx context.Context, id string, 
 	return nil
 }
 
-func (m *mockCampaignRepo) WarmupRedisStock(ctx context.Context, id string, stock int) error {
-	m.redis[id] = stock
+type mockStockCache struct {
+	stock map[string]int
+}
+
+func newMockStockCache() *mockStockCache {
+	return &mockStockCache{stock: make(map[string]int)}
+}
+
+func (m *mockStockCache) Warmup(ctx context.Context, campaignID string, stock int, ttl time.Duration) error {
+	m.stock[campaignID] = stock
 	return nil
 }
 
-func (m *mockCampaignRepo) GetRedisStock(ctx context.Context, id string) (int, error) {
-	if stock, ok := m.redis[id]; ok {
-		return stock, nil
+func (m *mockStockCache) Stock(ctx context.Context, campaignID string) (int, error) {
+	if s, ok := m.stock[campaignID]; ok {
+		return s, nil
 	}
 	return -1, nil
 }
 
+func (m *mockStockCache) PublishMeta(ctx context.Context, campaignID string, meta domain.CampaignMeta) error {
+	return nil
+}
+
+func (m *mockStockCache) Stocks(ctx context.Context, campaignIDs []string) (map[string]int, error) {
+	result := make(map[string]int)
+	for _, id := range campaignIDs {
+		if s, ok := m.stock[id]; ok {
+			result[id] = s
+		} else {
+			result[id] = -1
+		}
+	}
+	return result, nil
+}
+
 func TestCampaignUsecase_Create(t *testing.T) {
 	repo := newMockCampaignRepo()
-	uc := usecase.NewCampaignUsecase(repo)
+	cache := newMockStockCache()
+	uc := usecase.NewCampaignUsecase(repo, cache)
 	ctx := context.Background()
 
 	t.Run("invalid stock <= 0", func(t *testing.T) {
@@ -108,8 +131,8 @@ func TestCampaignUsecase_Create(t *testing.T) {
 		if camp.RemainingStock != 500 {
 			t.Fatalf("expected remaining stock 500, got %d", camp.RemainingStock)
 		}
-		if repo.redis[camp.ID] != 500 {
-			t.Fatalf("expected redis stock 500, got %d", repo.redis[camp.ID])
+		if cache.stock[camp.ID] != 500 {
+			t.Fatalf("expected cache stock 500, got %d", cache.stock[camp.ID])
 		}
 	})
 }

@@ -4,31 +4,28 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"strconv"
 	"time"
 
 	"voucher-flash-sale/services/campaign-service/internal/domain"
-
-	"github.com/redis/go-redis/v9"
 )
 
 type PostgresCampaignRepo struct {
-	db  *sql.DB
-	rdb *redis.Client
+	db *sql.DB
 }
 
-func NewPostgresCampaignRepo(db *sql.DB, rdb *redis.Client) *PostgresCampaignRepo {
-	return &PostgresCampaignRepo{
-		db:  db,
-		rdb: rdb,
-	}
+func NewPostgresCampaignRepo(db *sql.DB) *PostgresCampaignRepo {
+	return &PostgresCampaignRepo{db: db}
 }
 
 func (r *PostgresCampaignRepo) Create(ctx context.Context, c *domain.Campaign) error {
 	query := `
-		INSERT INTO campaigns (id, title, description, total_stock, remaining_stock, discount_amount, start_time, end_time, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO campaigns (
+			id, title, description,
+			session_stock, claimed_count, remaining_stock, discount_amount,
+			start_time, end_time, status, created_at, updated_at,
+			product_id, flash_sale_event_id, category_id
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 	_, err := r.db.ExecContext(
 		ctx,
@@ -36,7 +33,8 @@ func (r *PostgresCampaignRepo) Create(ctx context.Context, c *domain.Campaign) e
 		c.ID,
 		c.Title,
 		c.Description,
-		c.TotalStock,
+		c.SessionStock,
+		c.ClaimedCount,
 		c.RemainingStock,
 		c.DiscountAmount,
 		c.StartTime,
@@ -44,24 +42,32 @@ func (r *PostgresCampaignRepo) Create(ctx context.Context, c *domain.Campaign) e
 		c.Status,
 		c.CreatedAt,
 		c.UpdatedAt,
+		nullIfEmpty(c.ProductID),
+		nullIfEmpty(c.FlashSaleEventID),
+		nullIfEmpty(c.CategoryID),
 	)
 	return err
 }
 
 func (r *PostgresCampaignRepo) GetByID(ctx context.Context, id string) (*domain.Campaign, error) {
 	query := `
-		SELECT id, title, description, total_stock, remaining_stock, discount_amount, start_time, end_time, status, created_at, updated_at
+		SELECT id, title, description,
+		       session_stock, claimed_count, remaining_stock, discount_amount,
+		       start_time, end_time, status, created_at, updated_at,
+		       product_id, flash_sale_event_id, category_id
 		FROM campaigns
 		WHERE id = $1
 	`
 	row := r.db.QueryRowContext(ctx, query, id)
 
 	c := &domain.Campaign{}
+	var productID, eventID, categoryID sql.NullString
 	err := row.Scan(
 		&c.ID,
 		&c.Title,
 		&c.Description,
-		&c.TotalStock,
+		&c.SessionStock,
+		&c.ClaimedCount,
 		&c.RemainingStock,
 		&c.DiscountAmount,
 		&c.StartTime,
@@ -69,6 +75,9 @@ func (r *PostgresCampaignRepo) GetByID(ctx context.Context, id string) (*domain.
 		&c.Status,
 		&c.CreatedAt,
 		&c.UpdatedAt,
+		&productID,
+		&eventID,
+		&categoryID,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -77,12 +86,18 @@ func (r *PostgresCampaignRepo) GetByID(ctx context.Context, id string) (*domain.
 		return nil, err
 	}
 
+	c.ProductID = productID.String
+	c.FlashSaleEventID = eventID.String
+	c.CategoryID = categoryID.String
 	return c, nil
 }
 
 func (r *PostgresCampaignRepo) List(ctx context.Context) ([]*domain.Campaign, error) {
 	query := `
-		SELECT id, title, description, total_stock, remaining_stock, discount_amount, start_time, end_time, status, created_at, updated_at
+		SELECT id, title, description,
+		       session_stock, claimed_count, remaining_stock, discount_amount,
+		       start_time, end_time, status, created_at, updated_at,
+		       product_id, flash_sale_event_id, category_id
 		FROM campaigns
 		ORDER BY created_at DESC
 	`
@@ -95,11 +110,13 @@ func (r *PostgresCampaignRepo) List(ctx context.Context) ([]*domain.Campaign, er
 	var list []*domain.Campaign
 	for rows.Next() {
 		c := &domain.Campaign{}
+		var productID, eventID, categoryID sql.NullString
 		err := rows.Scan(
 			&c.ID,
 			&c.Title,
 			&c.Description,
-			&c.TotalStock,
+			&c.SessionStock,
+			&c.ClaimedCount,
 			&c.RemainingStock,
 			&c.DiscountAmount,
 			&c.StartTime,
@@ -107,10 +124,16 @@ func (r *PostgresCampaignRepo) List(ctx context.Context) ([]*domain.Campaign, er
 			&c.Status,
 			&c.CreatedAt,
 			&c.UpdatedAt,
+			&productID,
+			&eventID,
+			&categoryID,
 		)
 		if err != nil {
 			return nil, err
 		}
+		c.ProductID = productID.String
+		c.FlashSaleEventID = eventID.String
+		c.CategoryID = categoryID.String
 		list = append(list, c)
 	}
 
@@ -127,20 +150,11 @@ func (r *PostgresCampaignRepo) UpdateRemainingStock(ctx context.Context, id stri
 	return err
 }
 
-func (r *PostgresCampaignRepo) WarmupRedisStock(ctx context.Context, id string, stock int) error {
-	stockKey := fmt.Sprintf("campaign:stock:%s", id)
-	return r.rdb.Set(ctx, stockKey, stock, 0).Err()
-}
-
-func (r *PostgresCampaignRepo) GetRedisStock(ctx context.Context, id string) (int, error) {
-	stockKey := fmt.Sprintf("campaign:stock:%s", id)
-	val, err := r.rdb.Get(ctx, stockKey).Result()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return -1, nil // not in redis yet
-		}
-		return 0, err
+// nullIfEmpty mengembalikan nil untuk string kosong agar kolom FK nullable
+// menerima NULL, bukan string kosong yang tidak valid sebagai FK.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
 	}
-
-	return strconv.Atoi(val)
+	return s
 }

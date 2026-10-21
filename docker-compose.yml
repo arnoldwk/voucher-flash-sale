@@ -50,6 +50,7 @@ services:
       POSTGRES_DB: flashsale
       POSTGRES_SSLMODE: disable
       REDIS_ADDR: redis:6379
+      JWT_SECRET: salt-hackathon-jwt-secret-key-32bytes
     depends_on:
       postgres:
         condition: service_healthy
