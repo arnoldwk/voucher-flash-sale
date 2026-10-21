@@ -9,12 +9,16 @@ import (
 
 // Response codes exposed to clients.
 const (
-	CodeSuccess        = "SUCCESS"
-	CodeInvalidRequest = "INVALID_REQUEST"
-	CodeUnauthorized   = "UNAUTHORIZED"
-	CodeForbidden      = "FORBIDDEN"
-	CodeNotFound       = "NOT_FOUND"
-	CodeInternalError  = "INTERNAL_ERROR"
+	CodeSuccess             = "SUCCESS"
+	CodeInvalidRequest      = "INVALID_REQUEST"
+	CodeUnauthorized        = "UNAUTHORIZED"
+	CodeForbidden           = "FORBIDDEN"
+	CodeNotFound            = "NOT_FOUND"
+	CodeInternalError       = "INTERNAL_ERROR"
+	CodeCreated             = "CREATED"
+	CodeStockUnavailable    = "STOCK_UNAVAILABLE"
+	CodeAlreadyEntitled     = "ALREADY_ENTITLED"
+	CodeIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
 )
 
 // Envelope is the standard response body.
@@ -40,6 +44,17 @@ func Success(w http.ResponseWriter, statusCode int, message string, data any) {
 	})
 }
 
+// SuccessWithCode writes a 2xx envelope with a custom response code.
+// Used for endpoints such as POST /v1/orders whose contract requires code CREATED.
+func SuccessWithCode(w http.ResponseWriter, statusCode int, code, message string, data any) {
+	write(w, statusCode, Envelope{
+		Status:  true,
+		Code:    code,
+		Message: message,
+		Data:    data,
+	})
+}
+
 // Error writes a non-2xx envelope.
 func Error(w http.ResponseWriter, statusCode int, code, message string) {
 	msg := message
@@ -49,6 +64,23 @@ func Error(w http.ResponseWriter, statusCode int, code, message string) {
 		Message:      "",
 		ErrorMessage: &msg,
 		ErrorData:    nil,
+		Data:         nil,
+	})
+}
+
+// ErrorWithData writes a non-2xx envelope with an attached errorData payload.
+// Used for structured client-facing errors such as STOCK_UNAVAILABLE where the
+// caller needs the offending category.
+func ErrorWithData(w http.ResponseWriter, statusCode int, code, message, errorMessage string, errorData any) {
+	msg := message
+	errMsg := errorMessage
+	write(w, statusCode, Envelope{
+		Status:       false,
+		Code:         code,
+		Message:      msg,
+		ErrorMessage: &errMsg,
+		ErrorData:    errorData,
+		Data:         nil,
 	})
 }
 

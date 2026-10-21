@@ -28,6 +28,7 @@ build:
 	go build -o bin/voucher-service ./services/voucher-service/cmd/server
 	go build -o bin/customer-service ./services/customer-service/cmd/server
 	go build -o bin/auth-service ./services/auth-service/cmd/server
+	go build -o bin/transaction-service ./services/transaction-service/cmd/server
 
 run-campaign:
 	go run ./services/campaign-service/cmd/server
@@ -44,6 +45,9 @@ run-customer:
 run-auth:
 	go run ./services/auth-service/cmd/server
 
+run-transaction:
+	go run ./services/transaction-service/cmd/server
+
 # Generate a dev JWT for testing protected endpoints (reads JWT_SECRET from .env).
 token:
 	go run ./scripts/token
@@ -56,7 +60,8 @@ run-all:
 	$(MAKE) run-voucher > /tmp/voucher.log 2>&1 &
 	$(MAKE) run-customer > /tmp/customer.log 2>&1 &
 	$(MAKE) run-auth > /tmp/auth.log 2>&1 &
-	@echo "All services started. Logs: /tmp/{campaign,claim,voucher,customer,auth}.log"
+	$(MAKE) run-transaction > /tmp/transaction.log 2>&1 &
+	@echo "All services started. Logs: /tmp/{campaign,claim,voucher,customer,auth,transaction}.log"
 	@echo "Stop with: pkill -f 'voucher-flash-sale/services'"
 
 docker-up:
@@ -96,6 +101,10 @@ db-seed:
 	@docker compose exec -T postgres psql -U postgres -d flashsale -v ON_ERROR_STOP=1 < scripts/db/101_seed_flash_sale.sql
 	@echo "Seeding voucher products..."
 	@docker compose exec -T postgres psql -U postgres -d flashsale -v ON_ERROR_STOP=1 < scripts/db/102_seed_voucher_products.sql
+	@echo "Applying orders schema..."
+	@docker compose exec -T postgres psql -U postgres -d flashsale -v ON_ERROR_STOP=1 < scripts/db/005_schema_orders.sql
+	@echo "Seeding quotas..."
+	@docker compose exec -T postgres psql -U postgres -d flashsale -v ON_ERROR_STOP=1 < scripts/db/103_seed_quotas.sql
 	@echo "Done."
 
 db-verify:
